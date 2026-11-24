@@ -1,31 +1,21 @@
-use bevy::{
-    mesh::PrimitiveTopology, platform::collections::HashSet, prelude::*,
-    shape::ConvexPolygonError::Concave,
-};
+use bevy::prelude::*;
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_systems(Startup, (setup_camera, setup_notes))
+        .add_systems(Update, update_note_translation)
         .run();
 }
 
 #[derive(Component, Clone)]
-struct NoteColumn {
-    /// the speed is a percentage of the height of the window that a note
-    /// can trajj.
+struct NoteColumnSettings {
     speed: f32,
-
-    /// entities of the notes and how far away they are from the hitpoint
-    notes: HashSet<Entity>,
 }
 
-impl Default for NoteColumn {
+impl Default for NoteColumnSettings {
     fn default() -> Self {
-        Self {
-            speed: 25.,
-            notes: Default::default(),
-        }
+        Self { speed: 50. }
     }
 }
 
@@ -53,39 +43,53 @@ fn setup_notes(
     // which is a wide hexagon.
     let note_shape = meshes.add(
         ConvexPolygon::new([
-            vec2(-75., 0.),
-            vec2(-50., 25.),
-            vec2(50., 25.),
-            vec2(75., 0.),
-            vec2(50., -25.),
-            vec2(-50., -25.),
+            vec2(-40., 0.),
+            vec2(-30., 10.),
+            vec2(30., 10.),
+            vec2(40., 0.),
+            vec2(30., -10.),
+            vec2(-30., -10.),
         ])
         .expect("The note shape is defined wrong"),
     );
 
     let note_material = materials.add(Color::WHITE);
 
-    let notes_of_column_1 = [
-        (1., NoteType::Tapping),
-        (2., NoteType::Tapping),
-        (3., NoteType::Holding(3.)),
-        (7., NoteType::Tapping),
-    ]
-    .into_iter()
-    .map(|(timestamp, note_type)| {
-        commands
-            .spawn((
-                Mesh2d(note_shape.clone()),
-                MeshMaterial2d(note_material.clone()),
-                NoteTimestamp(timestamp),
-                note_type,
-            ))
-            .id()
-    })
-    .collect();
+    commands
+        .spawn((
+            Transform::default(),
+            NoteColumnSettings::default(),
+            Visibility::Visible,
+        ))
+        .with_children(|child_cmd| {
+            [
+                (1., NoteType::Tapping),
+                (2., NoteType::Tapping),
+                (3., NoteType::Holding(3.)),
+                (7., NoteType::Tapping),
+            ]
+            .into_iter()
+            .for_each(|(timestamp, note_type)| {
+                child_cmd.spawn((
+                    Transform::default(),
+                    Mesh2d(note_shape.clone()),
+                    MeshMaterial2d(note_material.clone()),
+                    NoteTimestamp(timestamp),
+                    note_type,
+                ));
+            });
+        });
+}
 
-    commands.spawn(NoteColumn {
-        notes: notes_of_column_1,
-        ..Default::default()
-    });
+fn update_note_translation(
+    column_query: Query<(&Children, &NoteColumnSettings)>,
+    mut note_query: Query<(&mut Transform, &NoteTimestamp)>,
+) {
+    for (children, column_settings) in column_query {
+        for child in children {
+            if let Ok((mut note_transform, note_timestamp)) = note_query.get_mut(*child) {
+                note_transform.translation.y = note_timestamp.0 * column_settings.speed;
+            }
+        }
+    }
 }
