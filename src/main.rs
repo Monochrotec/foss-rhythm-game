@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use bevy::{prelude::*, time::Stopwatch};
 
 const WINDOW_HEIGHT: f32 = 1080.;
@@ -12,12 +10,15 @@ const WINDOW_HEIGHT: f32 = 1080.;
 /// focusing on the center point
 const HIT_PLACE: f32 = WINDOW_HEIGHT / 3. - WINDOW_HEIGHT / 2.;
 
+const DEFAULT_NOTE_MOVEMENT_SPEED: f32 = 150.;
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .init_resource::<InLevelTime>()
+        .add_message::<NotePressed>()
         .add_systems(Startup, (setup_camera, setup_hit_place, setup_notes))
-        .add_systems(Update, update_note_translation)
+        .add_systems(Update, (check_for_note_press, update_note_translation))
         .run();
 }
 
@@ -25,24 +26,30 @@ fn main() {
 struct InLevelTime(Stopwatch);
 
 #[derive(Component, Clone)]
-struct NoteColumnSettings {
+struct NoteColumn {
+    id: u32,
     speed: f32,
+    time_range: f32,
 }
 
-impl Default for NoteColumnSettings {
-    fn default() -> Self {
-        Self { speed: 50. }
+impl NoteColumn {
+    fn new(id: u32, speed: f32) -> Self {
+        Self {
+            id,
+            speed,
+            time_range: 2.5 / speed,
+        }
     }
 }
 
 #[derive(Component, Clone, Default)]
-struct NoteTimestamp(Duration);
+struct NoteTimestamp(f32);
 
 #[derive(Component, Clone, Default)]
 enum NoteType {
     #[default]
     Tapping,
-    Holding(Duration),
+    Holding(f32),
 }
 
 fn setup_camera(mut commands: Commands) {
@@ -100,14 +107,14 @@ fn setup_notes(
     commands
         .spawn((
             Transform::default(),
-            NoteColumnSettings::default(),
+            NoteColumn::new(0, DEFAULT_NOTE_MOVEMENT_SPEED),
             Visibility::Visible,
         ))
         .with_children(|child_cmd| {
             [
                 (1., NoteType::Tapping),
                 (2., NoteType::Tapping),
-                (3., NoteType::Holding(Duration::from_secs(3))),
+                (3., NoteType::Holding(3.)),
                 (7., NoteType::Tapping),
             ]
             .into_iter()
@@ -116,7 +123,7 @@ fn setup_notes(
                     Transform::default(),
                     Mesh2d(note_shape.clone()),
                     MeshMaterial2d(note_material.clone()),
-                    NoteTimestamp(Duration::from_secs_f32(timestamp)),
+                    NoteTimestamp(timestamp),
                     note_type,
                 ));
             });
@@ -124,19 +131,43 @@ fn setup_notes(
 }
 
 fn update_note_translation(
+    in_level_time: Res<InLevelTime>,
+
+    column_query: Query<(&Children, &NoteColumn)>,
+    mut note_query: Query<(&mut Transform, &NoteTimestamp)>,
+) {
+    for (children, column) in column_query {
+        for child in children {
+            if let Ok((mut note_transform, note_timestamp)) = note_query.get_mut(*child) {
+                note_transform.translation.y =
+                    (note_timestamp.0 - in_level_time.0.elapsed_secs()) * column.speed + HIT_PLACE;
+            }
+        }
+    }
+}
+
+#[derive(Message)]
+struct NotePressed(Entity);
+
+fn check_for_note_press(
+    mut note_action_writer: MessageWriter<NotePressed>,
+
     time: Res<Time>,
     mut in_level_time: ResMut<InLevelTime>,
-    column_query: Query<(&Children, &NoteColumnSettings)>,
-    mut note_query: Query<(&mut Transform, &NoteTimestamp)>,
+
+    column_query: Query<(&Children, &NoteColumn)>,
+    note_query: Query<&NoteTimestamp>,
 ) {
     in_level_time.0.tick(time.delta());
 
-    for (children, column_settings) in column_query {
+    for (children, column) in column_query {
         for child in children {
-            if let Ok((mut note_transform, note_timestamp)) = note_query.get_mut(*child) {
-                note_transform.translation.y = (note_timestamp.0.as_secs_f32()
-                    - in_level_time.0.elapsed().as_secs_f32())
-                    * column_settings.speed;
+            if let Ok(note_timestamp) = note_query.get(*child) {
+                if (note_timestamp.0 - in_level_time.0.elapsed_secs()).abs() <= column.time_range {
+                    note_action_writer.write(NotePressed(*child));
+
+                    println!("hovering over note with entity id {child}");
+                }
             }
         }
     }
