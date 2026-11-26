@@ -18,4 +18,4 @@ lto = "thin"
 strip = true
 
 [dependencies]
-bevy = { version = "0.20", default-features = false, features = ["2d", "audio", "debug", "dynamic_linking", "ui"] }
+bevy = { version = "0.20", default-features = false, features = ["2d", "audio", "bevy_settings", "debug", "dynamic_linking", "ui"] }

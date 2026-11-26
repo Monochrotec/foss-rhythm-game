@@ -1,4 +1,12 @@
-use bevy::{prelude::*, time::Stopwatch};
+mod settings;
+
+use bevy::{
+    platform::collections::{HashMap, HashSet},
+    prelude::*,
+    time::Stopwatch,
+};
+
+use crate::settings::{KeybindAction, Keybinds, MySettingsPlugin};
 
 const WINDOW_HEIGHT: f32 = 1080.;
 
@@ -14,40 +22,42 @@ const DEFAULT_NOTE_MOVEMENT_SPEED: f32 = 150.;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
+        .add_plugins((
+            DefaultPlugins.set(ImagePlugin::default_nearest()),
+            MySettingsPlugin,
+        ))
         .init_resource::<InLevelTime>()
-        .add_message::<NotePressed>()
+        .init_resource::<InLevelTime>()
+        .init_resource::<PressableNotes>()
+        .init_resource::<MissedNotes>()
         .add_systems(Startup, (setup_camera, setup_hit_place, setup_notes))
-        .add_systems(Update, (check_for_note_press, update_note_translation))
+        .add_systems(
+            FixedUpdate,
+            (update_note_translation, check_for_note_presses).chain(),
+        )
         .run();
 }
 
 #[derive(Resource, Default)]
 struct InLevelTime(Stopwatch);
 
-#[derive(Component, Clone)]
+#[derive(Resource, Default)]
+struct PressableNotes(HashMap<u32, Entity>);
+
+#[derive(Resource, Default)]
+struct MissedNotes(HashSet<Entity>);
+
+#[derive(Component)]
 struct NoteColumn {
     id: u32,
     speed: f32,
-    time_range: f32,
 }
 
-impl NoteColumn {
-    fn new(id: u32, speed: f32) -> Self {
-        Self {
-            id,
-            speed,
-            time_range: 2.5 / speed,
-        }
-    }
-}
-
-#[derive(Component, Clone, Default)]
+#[derive(Component)]
 struct NoteTimestamp(f32);
 
-#[derive(Component, Clone, Default)]
+#[derive(Component)]
 enum NoteType {
-    #[default]
     Tapping,
     Holding(f32),
 }
@@ -93,11 +103,11 @@ fn setup_notes(
     let note_shape = meshes.add(
         ConvexPolygon::new([
             vec2(-40., 0.),
-            vec2(-30., 10.),
-            vec2(30., 10.),
+            vec2(-30., 15.),
+            vec2(30., 15.),
             vec2(40., 0.),
-            vec2(30., -10.),
-            vec2(-30., -10.),
+            vec2(30., -15.),
+            vec2(-30., -15.),
         ])
         .expect("The note shape is defined wrong"),
     );
@@ -107,7 +117,10 @@ fn setup_notes(
     commands
         .spawn((
             Transform::default(),
-            NoteColumn::new(0, DEFAULT_NOTE_MOVEMENT_SPEED),
+            NoteColumn {
+                id: 0,
+                speed: DEFAULT_NOTE_MOVEMENT_SPEED,
+            },
             Visibility::Visible,
         ))
         .with_children(|child_cmd| {
@@ -131,11 +144,14 @@ fn setup_notes(
 }
 
 fn update_note_translation(
-    in_level_time: Res<InLevelTime>,
+    time: Res<Time>,
+    mut in_level_time: ResMut<InLevelTime>,
 
     column_query: Query<(&Children, &NoteColumn)>,
     mut note_query: Query<(&mut Transform, &NoteTimestamp)>,
 ) {
+    in_level_time.0.tick(time.delta());
+
     for (children, column) in column_query {
         for child in children {
             if let Ok((mut note_transform, note_timestamp)) = note_query.get_mut(*child) {
@@ -146,27 +162,27 @@ fn update_note_translation(
     }
 }
 
-#[derive(Message)]
-struct NotePressed(Entity);
-
-fn check_for_note_press(
-    mut note_action_writer: MessageWriter<NotePressed>,
-
+fn check_for_note_presses(
     time: Res<Time>,
+    input: Res<ButtonInput<KeyCode>>,
+    keybinds: Res<Keybinds>,
+
     mut in_level_time: ResMut<InLevelTime>,
+    mut missed_notes: ResMut<MissedNotes>,
 
     column_query: Query<(&Children, &NoteColumn)>,
-    note_query: Query<&NoteTimestamp>,
+    note_query: Query<&Transform, (With<NoteTimestamp>, With<NoteType>)>,
 ) {
     in_level_time.0.tick(time.delta());
 
     for (children, column) in column_query {
-        for child in children {
-            if let Ok(note_timestamp) = note_query.get(*child) {
-                if (note_timestamp.0 - in_level_time.0.elapsed_secs()).abs() <= column.time_range {
-                    note_action_writer.write(NotePressed(*child));
+        let is_just_pressed =
+            keybinds.is_keybind_just_pressed(&KeybindAction::PressNote(column.id), &input);
 
-                    println!("hovering over note with entity id {child}");
+        for child in children {
+            if let Ok(note_transform) = note_query.get(*child) {
+                if (note_transform.translation.y - HIT_PLACE).abs() <= 20. && is_just_pressed {
+                    println!("Note for column {} just pressed", column.id);
                 }
             }
         }
