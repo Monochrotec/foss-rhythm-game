@@ -19,3 +19,5 @@ strip = true
 
 [dependencies]
 bevy = { version = "0.20", default-features = false, features = ["2d", "audio", "bevy_settings", "debug", "dynamic_linking", "ui"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
