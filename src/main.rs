@@ -1,10 +1,6 @@
 mod settings;
 
-use bevy::{
-    platform::collections::{HashMap, HashSet},
-    prelude::*,
-    time::Stopwatch,
-};
+use bevy::{prelude::*, time::Stopwatch};
 
 use crate::settings::{KeybindAction, Keybinds, MySettingsPlugin};
 
@@ -26,26 +22,28 @@ fn main() {
             DefaultPlugins.set(ImagePlugin::default_nearest()),
             MySettingsPlugin,
         ))
+        .add_message::<WrongPress>()
         .init_resource::<InLevelTime>()
         .init_resource::<InLevelTime>()
-        .init_resource::<PressableNotes>()
-        .init_resource::<MissedNotes>()
         .add_systems(Startup, (setup_camera, setup_hit_place, setup_notes))
         .add_systems(
             FixedUpdate,
-            (update_note_translation, check_for_note_presses).chain(),
+            (
+                update_note_translation,
+                check_for_note_presses,
+                despawn_pressed_notes,
+            )
+                .chain(),
         )
         .run();
 }
 
+/// this is for when u press while there isnt any notes in range
+#[derive(Message)]
+struct WrongPress;
+
 #[derive(Resource, Default)]
 struct InLevelTime(Stopwatch);
-
-#[derive(Resource, Default)]
-struct PressableNotes(HashMap<u32, Entity>);
-
-#[derive(Resource, Default)]
-struct MissedNotes(HashSet<Entity>);
 
 #[derive(Component)]
 struct NoteColumn {
@@ -60,6 +58,13 @@ struct NoteTimestamp(f32);
 enum NoteType {
     Tapping,
     Holding(f32),
+}
+
+#[derive(Component, PartialEq, Eq)]
+enum NoteState {
+    None,
+    Pressed,
+    Missed,
 }
 
 fn setup_camera(mut commands: Commands) {
@@ -137,6 +142,7 @@ fn setup_notes(
                     Mesh2d(note_shape.clone()),
                     MeshMaterial2d(note_material.clone()),
                     NoteTimestamp(timestamp),
+                    NoteState::None,
                     note_type,
                 ));
             });
@@ -163,28 +169,50 @@ fn update_note_translation(
 }
 
 fn check_for_note_presses(
-    time: Res<Time>,
+    mut wrong_press_writer: MessageWriter<WrongPress>,
+
     input: Res<ButtonInput<KeyCode>>,
     keybinds: Res<Keybinds>,
 
-    mut in_level_time: ResMut<InLevelTime>,
-    mut missed_notes: ResMut<MissedNotes>,
-
     column_query: Query<(&Children, &NoteColumn)>,
-    note_query: Query<&Transform, (With<NoteTimestamp>, With<NoteType>)>,
+    mut note_query: Query<(&mut NoteState, &Transform), With<NoteType>>,
 ) {
-    in_level_time.0.tick(time.delta());
-
     for (children, column) in column_query {
         let is_just_pressed =
             keybinds.is_keybind_just_pressed(&KeybindAction::PressNote(column.id), &input);
 
+        let mut is_any_note_in_range = false;
+
         for child in children {
-            if let Ok(note_transform) = note_query.get(*child) {
-                if (note_transform.translation.y - HIT_PLACE).abs() <= 20. && is_just_pressed {
-                    println!("Note for column {} just pressed", column.id);
+            if let Ok((mut note_state, note_transform)) = note_query.get_mut(*child) {
+                let note_hitplace_diff = note_transform.translation.y - HIT_PLACE;
+
+                if note_hitplace_diff.abs() <= 17.5 && is_just_pressed {
+                    is_any_note_in_range = true;
+
+                    if is_just_pressed {
+                        *note_state = NoteState::Pressed;
+                    }
+                }
+
+                if note_hitplace_diff < -17.5 && *note_state != NoteState::Pressed {
+                    *note_state = NoteState::Missed;
                 }
             }
+        }
+
+        // if there isnt any note in range and the key for the column is pressed send a
+        // message that a wrong press has happened.
+        if !is_any_note_in_range && is_just_pressed {
+            wrong_press_writer.write(WrongPress);
+        }
+    }
+}
+
+fn despawn_pressed_notes(mut commands: Commands, query: Query<(Entity, &NoteState)>) {
+    for (entity, note_state) in query {
+        if *note_state == NoteState::Pressed {
+            commands.entity(entity).despawn();
         }
     }
 }
